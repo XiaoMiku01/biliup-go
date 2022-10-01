@@ -47,7 +47,7 @@ jobs:
                   export BINARY_NAME="$BINARY_PREFIX$GOOS_$GOARCH$BINARY_SUFFIX"
                   export CGO_ENABLED=0
                   export LD_FLAGS="-w -s"
-                  go build -o "output/$BINARY_NAME" -trimpath -ldflags "$LD_FLAGS" .
+                  go build -o "output/$BINARY_NAME" -trimpath -ldflags "$LD_FLAGS" ./cmd/main.go
             - name: Upload artifact
               uses: actions/upload-artifact@v2
               if: ${{ !github.head_ref }}

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"biliup-go/login"
-	"biliup-go/upload"
+	"github.com/XiaoMiku01/biliup-go/login"
+	"github.com/XiaoMiku01/biliup-go/upload"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 

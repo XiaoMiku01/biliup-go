@@ -8,6 +8,9 @@ release:
     discussion_category_name: General
 builds:
     - id: nowin
+
+      main: ./cmd/main.go
+
       env:
           - CGO_ENABLED=0
           - GO111MODULE=on
@@ -32,6 +35,9 @@ builds:
       ldflags:
           - -s -w
     - id: win
+
+      main: ./cmd/main.go
+
       env:
           - CGO_ENABLED=0
           - GO111MODULE=on

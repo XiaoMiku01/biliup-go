@@ -280,7 +280,6 @@ func (u *Up) upload() {
 	wg.Wait()
 	close(partchan)
 	jsonString, _ := json.Marshal(&reqjson)
-	log.Println(string(jsonString))
 	u.client.R().SetHeaders(map[string]string{
 		"Content-Type": "application/json",
 		"Origin":       "https://member.bilibili.com",

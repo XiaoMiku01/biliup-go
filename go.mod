@@ -1,4 +1,4 @@
-module biliup-go
+module github.com/XiaoMiku01/biliup-go
 
 go 1.19
 
