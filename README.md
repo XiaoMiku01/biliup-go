@@ -1,7 +1,5 @@
 # biliup-go
 
-**测试中,目前上传的视频过不了审,原因未知待解决**
-
 B 站命令行投稿工具 Golang 实现,支持 **扫码登录**, 并将登录后返回的 cookie 和 token 保存在 `cookie.json` 中，可用于其他项目。
 
 对 [biliup-rs](https://github.com/ForgQi/biliup-rs) 的 Golang 实现。

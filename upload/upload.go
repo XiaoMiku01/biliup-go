@@ -68,6 +68,7 @@ func NewUp(cookiePath string) *Up {
 	var client = req.C().SetCommonHeaders(map[string]string{
 		"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36 Edg/105.0.1343.53",
 		"cookie":     cookie,
+		"Connection": "keep-alive",
 	})
 	resp, _ := client.R().Get("https://api.bilibili.com/x/web-interface/nav")
 	uname := gjson.ParseBytes(resp.Bytes()).Get("data.uname").String()
@@ -159,6 +160,7 @@ func (u *Up) Up() {
 	u.upVideo.biliFileName = strings.Split(strings.Split(strings.Split(preupinfo.UposUri, "//")[1], "/")[1], ".")[0]
 	u.upVideo.chunkSize = preupinfo.ChunkSize
 	u.upVideo.auth = preupinfo.Auth
+	u.upVideo.bizId = preupinfo.BizId
 	u.upload()
 	var addreq = AddReqJson{
 		Copyright:    u.upType,
@@ -190,6 +192,7 @@ func (u *Up) Up() {
 		LosslessMusic: 0,
 		Csrf:          u.csrf,
 	}
+	//_ = addreq
 	resp, _ := u.client.R().SetQueryParams(map[string]string{
 		"csrf": u.csrf,
 	}).SetBodyJsonMarshal(addreq).Post("https://member.bilibili.com/x/vu/web/add/v3")
@@ -225,20 +228,21 @@ func (u *Up) upload() {
 			reqjson.Parts = append(reqjson.Parts, p)
 		}
 	}()
+	//for i := 0; int64(i) < chunks; i++ {
 	for {
 		buf := make([]byte, u.upVideo.chunkSize)
-		n, err := file.Read(buf)
+		size, err := file.Read(buf)
 		if err != nil && err != io.EOF {
 			break
 		}
-		buf = buf[:n]
-		size := len(buf)
+		buf = buf[:size]
+		//size := n
 		if size > 0 {
 			wg.Add(1)
 			end += size
-			go func(chunk int, start, end, size int, buf []byte) {
+			go func(chunk int, start, end, size int, buf []byte, bar *progressbar.ProgressBar) {
 				defer wg.Done()
-				u.client.R().SetHeaders(map[string]string{
+				resp, _ := u.client.R().SetHeaders(map[string]string{
 					"Content-Type":   "application/octet-stream",
 					"Content-Length": strconv.Itoa(size),
 				}).SetQueryParams(map[string]string{
@@ -250,13 +254,22 @@ func (u *Up) upload() {
 					"start":      strconv.Itoa(start),
 					"end":        strconv.Itoa(end),
 					"total":      strconv.FormatInt(u.upVideo.videoSize, 10),
-				}).SetBodyBytes(buf).Put(u.upVideo.uploadBaseUrl)
+				}).SetBodyBytes(buf).SetRetryCount(5).AddRetryHook(func(resp *req.Response, err error) {
+					log.Println("重试发送分片", chunk)
+					return
+				}).
+					AddRetryCondition(func(resp *req.Response, err error) bool {
+						return err != nil || resp.StatusCode != 200
+					}).Put(u.upVideo.uploadBaseUrl)
 				bar.Add(len(buf) / 1024 / 1024)
+				if resp.StatusCode != 200 {
+					log.Println("分片", chunk, "上传失败", resp.StatusCode, "size", size)
+				}
 				partchan <- Part{
 					PartNumber: int64(chunk + 1),
 					ETag:       "etag",
 				}
-			}(chunk, start, end, size, buf)
+			}(chunk, start, end, size, buf, bar)
 			start += size
 			chunk++
 		}
@@ -266,13 +279,25 @@ func (u *Up) upload() {
 	}
 	wg.Wait()
 	close(partchan)
-	u.client.R().SetQueryParams(map[string]string{
+	jsonString, _ := json.Marshal(&reqjson)
+	log.Println(string(jsonString))
+	u.client.R().SetHeaders(map[string]string{
+		"Content-Type": "application/json",
+		"Origin":       "https://member.bilibili.com",
+		"Referer":      "https://member.bilibili.com/",
+	}).SetQueryParams(map[string]string{
 		"output":   "json",
 		"profile":  "ugcfx/bup",
 		"name":     u.upVideo.videoName,
 		"uploadId": u.upVideo.uploadId,
 		"biz_id":   strconv.FormatInt(u.upVideo.bizId, 10),
-	}).SetBodyJsonMarshal(reqjson).SetResult(&upinfo).Post(u.upVideo.uploadBaseUrl)
+	}).SetBodyString(string(jsonString)).SetResult(&upinfo).SetRetryCount(5).AddRetryHook(func(resp *req.Response, err error) {
+		log.Println("重试发送分片确认请求")
+		return
+	}).
+		AddRetryCondition(func(resp *req.Response, err error) bool {
+			return err != nil || resp.StatusCode != 200
+		}).Post(u.upVideo.uploadBaseUrl)
 }
 
 func (u *Up) getMetaUposUri() string {
