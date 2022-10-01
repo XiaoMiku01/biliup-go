@@ -4,3 +4,5 @@
 *.exe
 .idea
 biliup-go
+
+dist/

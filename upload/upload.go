@@ -199,14 +199,16 @@ func (u *Up) Up() {
 func (u *Up) upload() {
 	var upinfo UpInfo
 	u.client.SetCommonHeader(
-		"X-Upos-Auth", u.upVideo.auth).R().SetQueryParams(map[string]string{
-		"uploads":  "",
-		"output":   "json",
-		"profile":  "ugcfx/bup",
-		"filesize": strconv.FormatInt(u.upVideo.videoSize, 10),
-		"partsize": strconv.FormatInt(u.upVideo.chunkSize, 10),
-		"biz_id":   strconv.FormatInt(u.upVideo.bizId, 10),
-	}).SetResult(&upinfo).Post(u.upVideo.uploadBaseUrl)
+		"X-Upos-Auth", u.upVideo.auth).R().
+		SetQueryParams(map[string]string{
+			"uploads":       "",
+			"output":        "json",
+			"profile":       "ugcfx/bup",
+			"filesize":      strconv.FormatInt(u.upVideo.videoSize, 10),
+			"partsize":      strconv.FormatInt(u.upVideo.chunkSize, 10),
+			"biz_id":        strconv.FormatInt(u.upVideo.bizId, 10),
+			"meta_upos_uri": u.getMetaUposUri(),
+		}).SetResult(&upinfo).Post(u.upVideo.uploadBaseUrl)
 	u.upVideo.uploadId = upinfo.UploadId
 	chunks := int64(math.Ceil(float64(u.upVideo.videoSize) / float64(u.upVideo.chunkSize)))
 	var reqjson = new(ReqJson)
@@ -234,9 +236,12 @@ func (u *Up) upload() {
 		if size > 0 {
 			wg.Add(1)
 			end += size
-			go func(chunk int, start, end int, buf []byte) {
+			go func(chunk int, start, end, size int, buf []byte) {
 				defer wg.Done()
-				u.client.R().SetQueryParams(map[string]string{
+				u.client.R().SetHeaders(map[string]string{
+					"Content-Type":   "application/octet-stream",
+					"Content-Length": strconv.Itoa(size),
+				}).SetQueryParams(map[string]string{
 					"partNumber": strconv.Itoa(chunk + 1),
 					"uploadId":   u.upVideo.uploadId,
 					"chunk":      strconv.Itoa(chunk),
@@ -245,13 +250,13 @@ func (u *Up) upload() {
 					"start":      strconv.Itoa(start),
 					"end":        strconv.Itoa(end),
 					"total":      strconv.FormatInt(u.upVideo.videoSize, 10),
-				}).SetBody(buf).Put(u.upVideo.uploadBaseUrl)
+				}).SetBodyBytes(buf).Put(u.upVideo.uploadBaseUrl)
 				bar.Add(len(buf) / 1024 / 1024)
 				partchan <- Part{
 					PartNumber: int64(chunk + 1),
 					ETag:       "etag",
 				}
-			}(chunk, start, end, buf)
+			}(chunk, start, end, size, buf)
 			start += size
 			chunk++
 		}
@@ -268,4 +273,19 @@ func (u *Up) upload() {
 		"uploadId": u.upVideo.uploadId,
 		"biz_id":   strconv.FormatInt(u.upVideo.bizId, 10),
 	}).SetBodyJsonMarshal(reqjson).SetResult(&upinfo).Post(u.upVideo.uploadBaseUrl)
+}
+
+func (u *Up) getMetaUposUri() string {
+	var metaUposUri PreUpInfo
+	u.client.R().SetQueryParams(map[string]string{
+		"name":       "file_meta.txt",
+		"size":       "2000",
+		"r":          "upos",
+		"profile":    "fxmeta/bup",
+		"ssl":        "0",
+		"version":    "2.10.4",
+		"build":      "2100400",
+		"webVersion": "2.0.0",
+	}).SetResult(&metaUposUri).Get("https://member.bilibili.com/preupload")
+	return metaUposUri.UposUri
 }

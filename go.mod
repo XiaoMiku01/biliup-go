@@ -7,6 +7,7 @@ require (
 	github.com/imroc/req/v3 v3.24.0
 	github.com/schollz/progressbar/v3 v3.11.0
 	github.com/tidwall/gjson v1.14.3
+	gopkg.in/alecthomas/kingpin.v2 v2.2.6
 )
 
 require (
@@ -40,6 +41,5 @@ require (
 	golang.org/x/term v0.0.0-20220919170432-7a66f970e087 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/tools v0.1.12 // indirect
-	gopkg.in/alecthomas/kingpin.v2 v2.2.6 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 )
