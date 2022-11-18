@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/imroc/req/v3"
+	"github.com/panjf2000/ants/v2"
 	"github.com/schollz/progressbar/v3"
 	"github.com/tidwall/gjson"
 	"io"
@@ -36,6 +37,10 @@ type Up struct {
 	client *req.Client
 
 	upVideo *UpVideo
+
+	threadNum int
+	partChan  chan Part
+	chunks    int64
 }
 
 type UpVideo struct {
@@ -50,7 +55,9 @@ type UpVideo struct {
 	bizId         int64
 }
 
-func NewUp(cookiePath string) *Up {
+var wg sync.WaitGroup
+
+func NewUp(cookiePath string, threadNum int) *Up {
 	var cookieinfo CookieInfo
 	loginInfo, err := os.ReadFile(cookiePath)
 	if err != nil || len(loginInfo) == 0 {
@@ -82,6 +89,7 @@ func NewUp(cookiePath string) *Up {
 		csrf:       csrf,
 		client:     client,
 		upVideo:    &UpVideo{},
+		threadNum:  threadNum,
 	}
 }
 
@@ -192,7 +200,7 @@ func (u *Up) Up() {
 		LosslessMusic: 0,
 		Csrf:          u.csrf,
 	}
-	//_ = addreq
+	_ = addreq
 	resp, _ := u.client.R().SetQueryParams(map[string]string{
 		"csrf": u.csrf,
 	}).SetBodyJsonMarshal(addreq).Post("https://member.bilibili.com/x/vu/web/add/v3")
@@ -200,6 +208,7 @@ func (u *Up) Up() {
 }
 
 func (u *Up) upload() {
+	defer ants.Release()
 	var upinfo UpInfo
 	u.client.SetCommonHeader(
 		"X-Upos-Auth", u.upVideo.auth).R().
@@ -213,22 +222,28 @@ func (u *Up) upload() {
 			"meta_upos_uri": u.getMetaUposUri(),
 		}).SetResult(&upinfo).Post(u.upVideo.uploadBaseUrl)
 	u.upVideo.uploadId = upinfo.UploadId
-	chunks := int64(math.Ceil(float64(u.upVideo.videoSize) / float64(u.upVideo.chunkSize)))
+	u.chunks = int64(math.Ceil(float64(u.upVideo.videoSize) / float64(u.upVideo.chunkSize)))
 	var reqjson = new(ReqJson)
 	file, _ := os.Open(u.videosPath)
 	defer file.Close()
 	chunk := 0
 	start := 0
 	end := 0
-	bar := progressbar.Default(u.upVideo.videoSize/1024/1024, "视频上传中...")
-	var wg sync.WaitGroup
-	var partchan = make(chan Part, chunks)
+	bar := progressbar.NewOptions(int(u.upVideo.videoSize/1024/1024),
+		progressbar.OptionSetWriter(os.Stdout),
+		progressbar.OptionSetItsString("MB"),
+		progressbar.OptionSetDescription("视频上传中..."),
+		progressbar.OptionSetWidth(50),
+		progressbar.OptionShowIts(),
+	)
+	u.partChan = make(chan Part, u.chunks)
 	go func() {
-		for p := range partchan {
+		for p := range u.partChan {
 			reqjson.Parts = append(reqjson.Parts, p)
 		}
 	}()
-	//for i := 0; int64(i) < chunks; i++ {
+	p, _ := ants.NewPool(u.threadNum)
+	defer p.Release()
 	for {
 		buf := make([]byte, u.upVideo.chunkSize)
 		size, err := file.Read(buf)
@@ -236,40 +251,11 @@ func (u *Up) upload() {
 			break
 		}
 		buf = buf[:size]
-		//size := n
 		if size > 0 {
 			wg.Add(1)
 			end += size
-			go func(chunk int, start, end, size int, buf []byte, bar *progressbar.ProgressBar) {
-				defer wg.Done()
-				resp, _ := u.client.R().SetHeaders(map[string]string{
-					"Content-Type":   "application/octet-stream",
-					"Content-Length": strconv.Itoa(size),
-				}).SetQueryParams(map[string]string{
-					"partNumber": strconv.Itoa(chunk + 1),
-					"uploadId":   u.upVideo.uploadId,
-					"chunk":      strconv.Itoa(chunk),
-					"chunks":     strconv.Itoa(int(chunks)),
-					"size":       strconv.Itoa(size),
-					"start":      strconv.Itoa(start),
-					"end":        strconv.Itoa(end),
-					"total":      strconv.FormatInt(u.upVideo.videoSize, 10),
-				}).SetBodyBytes(buf).SetRetryCount(5).AddRetryHook(func(resp *req.Response, err error) {
-					log.Println("重试发送分片", chunk)
-					return
-				}).
-					AddRetryCondition(func(resp *req.Response, err error) bool {
-						return err != nil || resp.StatusCode != 200
-					}).Put(u.upVideo.uploadBaseUrl)
-				bar.Add(len(buf) / 1024 / 1024)
-				if resp.StatusCode != 200 {
-					log.Println("分片", chunk, "上传失败", resp.StatusCode, "size", size)
-				}
-				partchan <- Part{
-					PartNumber: int64(chunk + 1),
-					ETag:       "etag",
-				}
-			}(chunk, start, end, size, buf, bar)
+			_ = p.Submit(u.uploadPartWrapper(chunk, start, end, size, buf, bar))
+			buf = nil
 			start += size
 			chunk++
 		}
@@ -278,7 +264,7 @@ func (u *Up) upload() {
 		}
 	}
 	wg.Wait()
-	close(partchan)
+	close(u.partChan)
 	jsonString, _ := json.Marshal(&reqjson)
 	u.client.R().SetHeaders(map[string]string{
 		"Content-Type": "application/json",
@@ -297,6 +283,72 @@ func (u *Up) upload() {
 		AddRetryCondition(func(resp *req.Response, err error) bool {
 			return err != nil || resp.StatusCode != 200
 		}).Post(u.upVideo.uploadBaseUrl)
+}
+
+func (u *Up) uploadPart(chunk int, start, end, size int, buf []byte, bar *progressbar.ProgressBar) {
+	defer wg.Done()
+	resp, _ := u.client.R().SetHeaders(map[string]string{
+		"Content-Type":   "application/octet-stream",
+		"Content-Length": strconv.Itoa(size),
+	}).SetQueryParams(map[string]string{
+		"partNumber": strconv.Itoa(chunk + 1),
+		"uploadId":   u.upVideo.uploadId,
+		"chunk":      strconv.Itoa(chunk),
+		"chunks":     strconv.Itoa(int(u.chunks)),
+		"size":       strconv.Itoa(size),
+		"start":      strconv.Itoa(start),
+		"end":        strconv.Itoa(end),
+		"total":      strconv.FormatInt(u.upVideo.videoSize, 10),
+	}).SetBodyBytes(buf).SetRetryCount(5).AddRetryHook(func(resp *req.Response, err error) {
+		log.Println("重试发送分片", chunk)
+		return
+	}).
+		AddRetryCondition(func(resp *req.Response, err error) bool {
+			return err != nil || resp.StatusCode != 200
+		}).Put(u.upVideo.uploadBaseUrl)
+	bar.Add(len(buf) / 1024 / 1024)
+	if resp.StatusCode != 200 {
+		log.Println("分片", chunk, "上传失败", resp.StatusCode, "size", size)
+	}
+	u.partChan <- Part{
+		PartNumber: int64(chunk + 1),
+		ETag:       "etag",
+	}
+}
+
+type taskFunc func()
+
+func (u *Up) uploadPartWrapper(chunk int, start, end, size int, buf []byte, bar *progressbar.ProgressBar) taskFunc {
+	return func() {
+		defer wg.Done()
+		resp, _ := u.client.R().SetHeaders(map[string]string{
+			"Content-Type":   "application/octet-stream",
+			"Content-Length": strconv.Itoa(size),
+		}).SetQueryParams(map[string]string{
+			"partNumber": strconv.Itoa(chunk + 1),
+			"uploadId":   u.upVideo.uploadId,
+			"chunk":      strconv.Itoa(chunk),
+			"chunks":     strconv.Itoa(int(u.chunks)),
+			"size":       strconv.Itoa(size),
+			"start":      strconv.Itoa(start),
+			"end":        strconv.Itoa(end),
+			"total":      strconv.FormatInt(u.upVideo.videoSize, 10),
+		}).SetBodyBytes(buf).SetRetryCount(5).AddRetryHook(func(resp *req.Response, err error) {
+			log.Println("重试发送分片", chunk)
+			return
+		}).
+			AddRetryCondition(func(resp *req.Response, err error) bool {
+				return err != nil || resp.StatusCode != 200
+			}).Put(u.upVideo.uploadBaseUrl)
+		bar.Add(len(buf) / 1024 / 1024)
+		if resp.StatusCode != 200 {
+			log.Println("分片", chunk, "上传失败", resp.StatusCode, "size", size)
+		}
+		u.partChan <- Part{
+			PartNumber: int64(chunk + 1),
+			ETag:       "etag",
+		}
+	}
 }
 
 func (u *Up) getMetaUposUri() string {

@@ -52,7 +52,8 @@ func main() {
 	tid := 1                    // 分区id
 	tag := "测试"                 // 标签 , 分割
 	source := "测试"              // 来源 upType 为 2 时必填
+	threadNum := 10              // 上传线程数
 	// 上传视频
-	upload.NewUp(cookieFile).SetVideos(int64(tid), int64(upType), videoPath, coverPath, title, desc, tag, source).Up()
+	upload.NewUp(cookieFile,threadNum).SetVideos(int64(tid), int64(upType), videoPath, coverPath, title, desc, tag, source).Up()
 }
 ```    

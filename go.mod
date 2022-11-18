@@ -5,6 +5,7 @@ go 1.19
 require (
 	github.com/Baozisoftware/qrcode-terminal-go v0.0.0-20170407111555-c0650d8dff0f
 	github.com/imroc/req/v3 v3.24.0
+	github.com/panjf2000/ants/v2 v2.6.0
 	github.com/schollz/progressbar/v3 v3.11.0
 	github.com/tidwall/gjson v1.14.3
 	gopkg.in/alecthomas/kingpin.v2 v2.2.6

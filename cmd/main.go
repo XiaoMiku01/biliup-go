@@ -18,12 +18,13 @@ func main() {
 	var tid = uploadCmd.Flag("tid", "分区id").Default("47").Int64()
 	var tag = uploadCmd.Flag("tags", "标签").Default("").String()
 	var source = uploadCmd.Flag("source", "来源 类型为转载时填写").Default("").String()
+	var threadNum = uploadCmd.Flag("thread", "上传线程数,默认 10").Default("10").Int()
 	kingpin.Parse()
 	switch kingpin.Parse() {
 	case loginCmd.FullCommand():
 		login.LoginBili()
 	case uploadCmd.FullCommand():
-		upload.NewUp(*cookie).
+		upload.NewUp(*cookie, *threadNum).
 			SetVideos(*tid, *upType, *videosPath, *coverPath, *videoTitle, *videoDesc, *tag, *source).
 			Up()
 	}
